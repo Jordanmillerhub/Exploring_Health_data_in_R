@@ -1,0 +1,153 @@
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(lm.beta))
+suppressPackageStartupMessages(library(psych))
+
+BRFSS <- read_csv("BRFSS2015.csv")
+
+#--------------------------------------------------------
+#How many people have any kind of health coverage
+Q1 <- BRFSS %>% 
+      filter(HLTHPLN1 == "1") %>%
+      count()
+
+#--------------------------------------------------------
+#finding the average number of days for poor mental health
+BRFSS2 <- BRFSS %>%
+        mutate(MENTHLTH = if_else(MENTHLTH == 88, 0, MENTHLTH))
+Q2 <- BRFSS2 %>%
+        filter(MENTHLTH < 31) %>%
+        summarize("Average number of days mental health not good" = mean(MENTHLTH))
+#--------------------------------------------------------
+#Mean and Sd for weight grouped by having arthritis or not
+Q3 <-  BRFSS %>%
+  filter(HAVARTH3 != 7, HAVARTH3 != 9, WEIGHT2 != 9999, WEIGHT2 != 999, WEIGHT2 != 7777, !is.na(WEIGHT2), !is.na(HAVARTH3)) %>%
+  group_by(HAVARTH3)%>%
+  select(HAVARTH3, WEIGHT2)%>%
+  mutate(WEIGHT2 = ifelse(WEIGHT2 >= 9000, (WEIGHT2 - 9000) * 2.20462, WEIGHT2))%>%
+  summarize(mean_weight = round(mean(WEIGHT2),2), sd_weight = round(sd(WEIGHT2),2))%>%
+  as.data.frame()
+
+#--------------------------------------------------------
+#Removing Outliers from total number of minutes physically active for further analysis 
+upperm <- quantile(BRFSS$PA1MIN_, 0.997, na.rm = TRUE)
+lowerm <- quantile(BRFSS$PA1MIN_, 0.003, na.rm = TRUE)
+minout <- which(BRFSS$PA1MIN_ > upperm | BRFSS$PA1MIN_ < lowerm)
+noout <- BRFSS[-minout,]
+Q4 <-round((nrow(BRFSS) - length(minout)) /nrow(BRFSS) *100, 2)
+
+#--------------------------------------------------------
+Q5 <- noout %>%
+  group_by(MARITAL)%>%
+  filter(!is.na(PA1MIN_))%>%
+  summarize(round(mean(PA1MIN_),2),round(sd(PA1MIN_),2),round(min(PA1MIN_),2),round(max(PA1MIN_),2))%>%
+  as.data.frame()
+
+#--------------------------------------------------------
+
+MARITALchr = as.character(noout$MARITAL)
+ggplot(noout, aes(x=MARITALchr, y=PA1MIN_)) +
+geom_boxplot()
+
+#--------------------------------------------------------
+
+Exercise <- lm(PA1MIN_ ~ MARITAL, data = noout)
+Q7 <- summary(Exercise)
+
+#--------------------------------------------------------
+
+model <- aov(PA1MIN_ ~ MARITALchr, data=noout)
+Q8 <- TukeyHSD(model)
+
+#--------------------------------------------------------
+
+Exercise_fruit <- lm(PA1MIN_ ~ MARITAL + `_FRUTSUM`, data=noout)
+print(summary(Exercise))
+print(summary(Exercise_fruit))
+print(AIC(Exercise))
+Q9 <- print(AIC(Exercise_fruit))
+
+#--------------------------------------------------------
+
+#The 4 varibles I will be examining are Estimated Functional Capacity(FC60_), ever told of have depression (ADDEPEV2), adults who have been told they have high blood pressure (_RFHYPE5), and being told they have asthma (_LTASTH1)
+#Main objective is to analyze this data spotting trends in predicting capacity with a mental health issue vs having a common physical ailment. 
+
+#Removing outliers using the quartile method because there is a large range of numbers. First, removing 99900 from the dataset because it is not set to 2 implied decimals but the rest of FC60_ is. If I do not remove this, it will alter my numbers when I divide by 100 to set the 2 decimals places later. I will be removing from capacity(FC60_) as it is the main numerical variable I will be predicting. This will make my regressions and other tests more reliable.
+BRFSS <- BRFSS %>%
+  filter(FC60_ != 99900) 
+upperc <- quantile(BRFSS$FC60_, 0.997, na.rm = TRUE)
+lowerc <- quantile(BRFSS$FC60_, 0.003, na.rm = TRUE)
+c_out <- which(BRFSS$FC60_ > upperc | BRFSS$FC60_ < lowerc)
+c_nooutliers <- BRFSS[-c_out,]
+
+
+#--------------------------------------------------------
+#removing Refused and don't know from ADDEPEV2: 1 = yes to depression, 2 = no
+c_nooutliers <- c_nooutliers %>% 
+  filter(ADDEPEV2 != 9, ADDEPEV2 != 7)
+
+#removing don't know/refused from _RFHYPE5: 1 = no high blood pressure, 2 = yes
+c_nooutliers <- c_nooutliers %>%
+  filter(`_RFHYPE5` != 9)
+
+#removing dont't know/refused from _LTASTH1: 1 = no asthma, 2 = yes
+c_nooutliers <- c_nooutliers %>%
+  filter(`_LTASTH1` != 9)
+
+#setting my already outlier free variable of FC60_ to 2 decimal places. The data source set it to two implied so I will divide my data by 100 to convert this.  
+c_nooutliers <- c_nooutliers %>%
+  mutate(FC60_ = FC60_ / 100)
+
+#selecting variables I am examining for quicker run time and easier manipulation.
+c_nooutliers <- c_nooutliers %>%
+  select(FC60_, ADDEPEV2,`_RFHYPE5`,`_LTASTH1`)
+ 
+#--------------------------------------------------------
+summary(c_nooutliers)
+#using psych describe for skew and kurtosis
+describe(c_nooutliers)
+#FC60_ is the only numerical variable. mean is above median hinting towards a slight right skew. Skew being positive supports this. negative kurtosis points to thin tails which can be seen in the histogram.skew and kurtosis are in the acceptable noraml range but may be do to sample size.
+describe(c_nooutliers$FC60_)
+#--------------------------------------------------------
+#bar graphs on the categorical variables
+ADD_bar <- ggplot(data = c_nooutliers) +  #much higher output of 2
+  geom_bar(aes(x=ADDEPEV2)) 
+RFH_bar <- ggplot(data = c_nooutliers) +  #higher output of 1
+  geom_bar(aes(x=`_RFHYPE5`))
+LTA_bar <- ggplot(data = c_nooutliers) +  #much higher output of 1
+  geom_bar(aes(x=`_LTASTH1`))
+#scatter plots on our continous variable seem to not help in predictions as the categorical data is binary. 
+ADD_scatr <- ggplot(data = c_nooutliers) +
+  geom_point(mapping = aes(x=ADDEPEV2, y = FC60_)) 
+#histogram on FC60_
+histoFC60_ <- ggplot(data =c_nooutliers, aes(x=FC60_)) +  #even with removing outliers graphing the data confirms a skew in the data. I will eplore with a few more graphs.
+  geom_blank() +
+  geom_histogram(aes(y=..density..))
+#qq plot 
+qqFC60_ <- ggplot(data = c_nooutliers, aes(sample = FC60_)) + stat_qq() + stat_qq_line() #This data shows a high magnitude of similar answers at the max. This none normal data will have to make us careful in our analysis.
+
+--------------------------------------------------------
+
+#to start I am doing a regression with all of my variables as predictors. Interesting to note they are all signifcant and P values are similar (most likely due to 1 and 2 being used as yes/no) however, importaatnt to look at the coefficient in terms of how the yes and no's are structured. 
+#using this regression, as depression goes from 1 (yes to depression) to 0. it decreases capacity (coefficient is -.04). So people with depression have higher capacity. Also, people with astma (having is 2) have higher capacity (coefficient is .05). Also interesting. The only one that follows my original thoughts is high blood pressure. People having high blood pressure lose capacity (coefficient is -.37) this is also the highest standardized coeeficent. 
+
+multi_regression <- lm(FC60_ ~ ADDEPEV2 + `_LTASTH1` + `_RFHYPE5`, data = c_nooutliers)
+summary(multi_regression)
+lm.beta(multi_regression)
+#individual regressions
+ADD_reg <-lm(FC60_ ~ ADDEPEV2, data = c_nooutliers)
+summary(ADD_reg)
+
+LTA_reg <- lm(FC60_ ~ `_LTASTH1`, data = c_nooutliers)
+summary(LTA_reg)
+
+RFH_reg <- lm(FC60_ ~ `_RFHYPE5`, data = c_nooutliers)
+summary(RFH_reg)
+#taking out ADDEPEV2 as it had lowest adjusted R^2 and lowest standardized coefficient
+multi_regression_noADD<- lm(FC60_ ~ `_LTASTH1` + `_RFHYPE5`, data = c_nooutliers)
+summary(multi_regression_noADD)
+#lower adjusted R^2 after removing, double checking by comparing AIC
+print(AIC(multi_regression))
+print(AIC(multi_regression_noADD))
+
+#BEST PREDICTOR is multi_regression with all variables included:
+multi_regression <- lm(FC60_ ~ ADDEPEV2 + `_LTASTH1` + `_RFHYPE5`, data = c_nooutliers)
